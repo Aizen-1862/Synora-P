@@ -1,0 +1,1 @@
+export type LyricLine={time:number;text:string}; export async function fetchLyrics(track:string,artist:string):Promise<LyricLine[]>{const q=new URLSearchParams({track,artist});const r=await fetch('/api/lyrics?'+q);if(!r.ok)throw new Error('Lyrics unavailable');const d=await r.json();return Array.isArray(d.lines)?d.lines:[];}

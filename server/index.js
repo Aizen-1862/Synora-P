@@ -1,1 +1,96 @@
-import express from 'express'; import cors from 'cors'; const app=express(); const PORT=process.env.PORT||8787; app.use(cors()); app.use(express.json()); app.get('/api/health',(_q,r)=>r.json({ok:true,service:'synora-p-api',lyricsProvider:'LRCLIB'})); app.get('/api/lyrics',async(q,r)=>{const {track,artist,album,duration}=q.query;if(!track||!artist)return r.status(400).json({error:'track and artist required'});try{const u=new URL('https://lrclib.net/api/get');u.searchParams.set('track_name',String(track));u.searchParams.set('artist_name',String(artist));if(album)u.searchParams.set('album_name',String(album));if(duration)u.searchParams.set('duration',String(duration));const x=await fetch(u,{headers:{'User-Agent':'SYNORA-P/0.1'}});if(!x.ok)return r.status(x.status===404?404:502).json({error:'No synchronized lyrics found'});const d=await x.json();const lines=(d.syncedLyrics||'').split(/\\r?\\n/).map(s=>{const m=s.match(/^\\[(\\d{2}):(\\d{2}(?:\\.\\d+)?)\\](.*)$/);return m?{time:Number(m[1])*60+Number(m[2]),text:m[3].trim()}:null}).filter(Boolean);r.json({track:d.trackName,artist:d.artistName,plainLyrics:d.plainLyrics||'',lines});}catch(e){console.error(e);r.status(502).json({error:'Lyrics provider unavailable'});}}); app.get('/api/lyrics/search',async(q,r)=>{if(!q.query.track)return r.status(400).json({error:'track required'});try{const u=new URL('https://lrclib.net/api/search');u.searchParams.set('track_name',String(q.query.track));if(q.query.artist)u.searchParams.set('artist_name',String(q.query.artist));const x=await fetch(u);if(!x.ok)return r.status(502).json({error:'Search unavailable'});const d=await x.json();r.json(d.slice(0,10).map(v=>({id:v.id,track:v.trackName,artist:v.artistName,album:v.albumName,duration:v.duration,hasSyncedLyrics:!!v.syncedLyrics})));}catch{r.status(502).json({error:'Lyrics provider unavailable'});}}); app.listen(PORT,()=>console.log('SYNORA:P API on '+PORT));
+import express from "express";
+import cors from "cors";
+
+const app = express();
+const PORT = Number(process.env.PORT) || 8787;
+
+app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
+app.use(express.json());
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, service: "synora-p-api", lyricsProvider: "LRCLIB" });
+});
+
+app.get("/api/lyrics", async (req, res) => {
+  const { track, artist, album, duration } = req.query;
+
+  if (typeof track !== "string" || !track.trim() ||
+      typeof artist !== "string" || !artist.trim()) {
+    return res.status(400).json({ error: "track and artist are required" });
+  }
+
+  try {
+    const url = new URL("https://lrclib.net/api/get");
+    url.searchParams.set("track_name", track.trim());
+    url.searchParams.set("artist_name", artist.trim());
+    if (typeof album === "string" && album.trim()) url.searchParams.set("album_name", album.trim());
+    if (typeof duration === "string" && duration.trim()) url.searchParams.set("duration", duration.trim());
+
+    const response = await fetch(url, {
+      headers: { "User-Agent": "SYNORA-P/0.1 (lyrics lookup)" },
+      signal: AbortSignal.timeout(10000)
+    });
+
+    if (response.status === 404) {
+      return res.status(404).json({ error: "No lyrics found for this track" });
+    }
+    if (!response.ok) {
+      return res.status(502).json({ error: "Lyrics provider returned an error" });
+    }
+
+    const data = await response.json();
+    const syncedLyrics = typeof data.syncedLyrics === "string" ? data.syncedLyrics : "";
+    const lines = syncedLyrics
+      .split(/\r?\n/)
+      .map((line) => {
+        const match = line.match(/^\[(\d{2}):(\d{2}(?:\.\d+)?)\](.*)$/);
+        return match
+          ? { time: Number(match[1]) * 60 + Number(match[2]), text: match[3].trim() }
+          : null;
+      })
+      .filter(Boolean);
+
+    res.json({
+      track: data.trackName,
+      artist: data.artistName,
+      plainLyrics: data.plainLyrics || "",
+      lines
+    });
+  } catch (error) {
+    console.error("Lyrics lookup failed:", error);
+    res.status(502).json({ error: "Lyrics provider unavailable or request timed out" });
+  }
+});
+
+app.get("/api/lyrics/search", async (req, res) => {
+  const track = req.query.track;
+  const artist = req.query.artist;
+
+  if (typeof track !== "string" || !track.trim()) {
+    return res.status(400).json({ error: "track is required" });
+  }
+
+  try {
+    const url = new URL("https://lrclib.net/api/search");
+    url.searchParams.set("track_name", track.trim());
+    if (typeof artist === "string" && artist.trim()) url.searchParams.set("artist_name", artist.trim());
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) return res.status(502).json({ error: "Lyrics search unavailable" });
+
+    const data = await response.json();
+    res.json(data.slice(0, 10).map((item) => ({
+      id: item.id,
+      track: item.trackName,
+      artist: item.artistName,
+      album: item.albumName,
+      duration: item.duration,
+      hasSyncedLyrics: Boolean(item.syncedLyrics)
+    })));
+  } catch (error) {
+    console.error("Lyrics search failed:", error);
+    res.status(502).json({ error: "Lyrics provider unavailable or request timed out" });
+  }
+});
+
+app.listen(PORT, () => console.log(`SYNORA:P API listening on port ${PORT}`));
